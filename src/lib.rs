@@ -437,7 +437,7 @@ impl FabricEndpoint {
     /// let mut buf = vec![0u8; 8192];
     /// buf = endpoint.send_to(peer, buf).await?;
     /// ```
-    pub fn send_to(&self, peer: PeerId, buf: Vec<u8>) -> Result<Vec<u8>> {
+    pub fn send_to(&self, peer: PeerId, buf: &[u8]) -> Result<()> {
         let ep = self.ep as usize;
         let fi_addr = peer.0;
         let cq = self.send_cq as usize;
@@ -473,7 +473,7 @@ impl FabricEndpoint {
                 );
 
                 if ret == 1 {
-                    return Ok(buf);
+                    return Ok(());
                 } else if ret < 0 && ret != EAGAIN_ERROR {
                     if ret == EAVAIL_ERROR {
                         return Err(cq_read_error(cq));
@@ -515,7 +515,7 @@ impl FabricEndpoint {
     /// let buf = endpoint.recv(buf).await?;
     /// // buf now contains received data
     /// ```
-    pub fn recv(&self, mut buf: Vec<u8>) -> Result<Vec<u8>> {
+    pub fn recv(&self, buf: &mut [u8]) -> Result<()> {
         let ep = self.ep as usize;
         let cq = self.recv_cq as usize;
 
@@ -551,7 +551,7 @@ impl FabricEndpoint {
                 );
 
                 if ret == 1 {
-                    return Ok(buf);
+                    return Ok(());
                 } else if ret < 0 && ret != EAGAIN_ERROR {
                     if ret == EAVAIL_ERROR {
                         return Err(cq_read_error(cq));
