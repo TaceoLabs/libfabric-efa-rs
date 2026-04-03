@@ -322,10 +322,19 @@ impl FabricEndpoint {
             let ret = ffi::wrap_fi_ep_bind(
                 ep,
                 &mut (*send_cq).fid as *mut ffi::fid,
-                (ffi::FI_SEND | ffi::FI_RECV) as u64,
+                ffi::FI_SEND as u64,
             );
             if ret != 0 {
-                bail!("fi_ep_bind cq failed: {}", ret);
+                bail!("fi_ep_bind send_cq failed: {}", ret);
+            }
+
+            let ret = ffi::wrap_fi_ep_bind(
+                ep,
+                &mut (*recv_cq).fid as *mut ffi::fid,
+                ffi::FI_RECV as u64,
+            );
+            if ret != 0 {
+                bail!("fi_ep_bind recv_cq failed: {}", ret);
             }
 
             let mut av_attr: ffi::fi_av_attr = std::mem::zeroed();
