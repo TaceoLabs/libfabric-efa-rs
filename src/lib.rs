@@ -130,7 +130,8 @@ pub struct FabricEndpoint {
     domain: *mut ffi::fid_domain,
     ep: *mut ffi::fid_ep,
     av: *mut ffi::fid_av,
-    cq: *mut ffi::fid_cq,
+    send_cq: *mut ffi::fid_cq,
+    recv_cq: *mut ffi::fid_cq,
     info: *mut ffi::fi_info,
     hints: *mut ffi::fi_info,
     fi_addr: ffi::fi_addr_t,
@@ -153,8 +154,11 @@ impl Drop for FabricEndpoint {
             if !self.av.is_null() {
                 ffi::wrap_fi_close(&mut (*self.av).fid as *mut ffi::fid);
             }
-            if !self.cq.is_null() {
-                ffi::wrap_fi_close(&mut (*self.cq).fid as *mut ffi::fid);
+            if !self.send_cq.is_null() {
+                ffi::wrap_fi_close(&mut (*self.send_cq).fid as *mut ffi::fid);
+            }
+            if !self.recv_cq.is_null() {
+                ffi::wrap_fi_close(&mut (*self.recv_cq).fid as *mut ffi::fid);
             }
             if !self.domain.is_null() {
                 ffi::wrap_fi_close(&mut (*self.domain).fid as *mut ffi::fid);
@@ -193,7 +197,8 @@ impl FabricEndpoint {
                 domain: *mut ffi::fid_domain,
                 ep: *mut ffi::fid_ep,
                 av: *mut ffi::fid_av,
-                cq: *mut ffi::fid_cq,
+                send_cq: *mut ffi::fid_cq,
+                recv_cq: *mut ffi::fid_cq,
                 info: *mut ffi::fi_info,
                 hints: *mut ffi::fi_info,
             }
@@ -207,8 +212,11 @@ impl FabricEndpoint {
                         if !self.av.is_null() {
                             ffi::wrap_fi_close(&mut (*self.av).fid as *mut ffi::fid);
                         }
-                        if !self.cq.is_null() {
-                            ffi::wrap_fi_close(&mut (*self.cq).fid as *mut ffi::fid);
+                        if !self.send_cq.is_null() {
+                            ffi::wrap_fi_close(&mut (*self.send_cq).fid as *mut ffi::fid);
+                        }
+                        if !self.recv_cq.is_null() {
+                            ffi::wrap_fi_close(&mut (*self.recv_cq).fid as *mut ffi::fid);
                         }
                         if !self.domain.is_null() {
                             ffi::wrap_fi_close(&mut (*self.domain).fid as *mut ffi::fid);
@@ -236,7 +244,8 @@ impl FabricEndpoint {
                 domain: ptr::null_mut(),
                 ep: ptr::null_mut(),
                 av: ptr::null_mut(),
-                cq: ptr::null_mut(),
+                send_cq: ptr::null_mut(),
+                recv_cq: ptr::null_mut(),
                 info: ptr::null_mut(),
                 hints,
             };
@@ -259,7 +268,7 @@ impl FabricEndpoint {
                 version,
                 ptr::null(),
                 port_cstr.as_ptr(),
-                ffi::FI_SOURCE as u64,
+                ffi::FI_SOURCE,
                 hints,
                 &mut info_ptr,
             );
@@ -296,16 +305,23 @@ impl FabricEndpoint {
             cq_attr.size = 128;
             cq_attr.format = ffi::fi_cq_format_FI_CQ_FORMAT_DATA;
 
-            let mut cq: *mut ffi::fid_cq = ptr::null_mut();
-            let ret = ffi::wrap_fi_cq_open(domain, &mut cq_attr, &mut cq, ptr::null_mut());
+            let mut send_cq: *mut ffi::fid_cq = ptr::null_mut();
+            let ret = ffi::wrap_fi_cq_open(domain, &mut cq_attr, &mut send_cq, ptr::null_mut());
             if ret != 0 {
                 bail!("fi_cq_open failed: {}", ret);
             }
-            guard.cq = cq;
+            guard.send_cq = send_cq;
+
+            let mut recv_cq: *mut ffi::fid_cq = ptr::null_mut();
+            let ret = ffi::wrap_fi_cq_open(domain, &mut cq_attr, &mut recv_cq, ptr::null_mut());
+            if ret != 0 {
+                bail!("fi_cq_open failed: {}", ret);
+            }
+            guard.recv_cq = recv_cq;
 
             let ret = ffi::wrap_fi_ep_bind(
                 ep,
-                &mut (*cq).fid as *mut ffi::fid,
+                &mut (*send_cq).fid as *mut ffi::fid,
                 (ffi::FI_SEND | ffi::FI_RECV) as u64,
             );
             if ret != 0 {
@@ -338,7 +354,8 @@ impl FabricEndpoint {
             let domain = guard.domain;
             let ep = guard.ep;
             let av = guard.av;
-            let cq = guard.cq;
+            let send_cq = guard.send_cq;
+            let recv_cq = guard.recv_cq;
             let info = guard.info;
             let hints = guard.hints;
             std::mem::forget(guard);
@@ -348,7 +365,8 @@ impl FabricEndpoint {
                 domain,
                 ep,
                 av,
-                cq,
+                send_cq,
+                recv_cq,
                 info,
                 hints,
                 fi_addr: 0,
@@ -384,7 +402,7 @@ impl FabricEndpoint {
     pub async fn send_to(&self, peer: PeerId, buf: Vec<u8>) -> Result<Vec<u8>> {
         let ep = self.ep as usize;
         let fi_addr = peer.0;
-        let cq = self.cq as usize;
+        let cq = self.send_cq as usize;
 
         tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             unsafe {
@@ -462,7 +480,7 @@ impl FabricEndpoint {
     /// ```
     pub async fn recv(&self, mut buf: Vec<u8>) -> Result<Vec<u8>> {
         let ep = self.ep as usize;
-        let cq = self.cq as usize;
+        let cq = self.recv_cq as usize;
 
         tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             unsafe {
