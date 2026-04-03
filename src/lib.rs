@@ -24,12 +24,10 @@
 //! }
 //! ```
 
-use eyre::{bail, ensure, Context, Result};
+use eyre::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
 use std::ptr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 
 #[allow(warnings, clippy::all)]
 #[allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
@@ -282,7 +280,7 @@ impl FabricEndpoint {
             };
 
             let provider_name = CString::new("efa").unwrap();
-            (*(*hints).fabric_attr).prov_name = provider_name.as_ptr() as *mut u8;
+            (*(*hints).fabric_attr).prov_name = provider_name.as_ptr() as *mut i8;
             std::mem::forget(provider_name);
 
             (*(*hints).ep_attr).type_ = ffi::fi_ep_type_FI_EP_RDM;
@@ -439,55 +437,51 @@ impl FabricEndpoint {
     /// let mut buf = vec![0u8; 8192];
     /// buf = endpoint.send_to(peer, buf).await?;
     /// ```
-    pub async fn send_to(&self, peer: PeerId, buf: Vec<u8>) -> Result<Vec<u8>> {
+    pub fn send_to(&self, peer: PeerId, buf: Vec<u8>) -> Result<Vec<u8>> {
         let ep = self.ep as usize;
         let fi_addr = peer.0;
         let cq = self.send_cq as usize;
+        unsafe {
+            let ep = ep as *mut ffi::fid_ep;
+            let cq = cq as *mut ffi::fid_cq;
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            unsafe {
-                let ep = ep as *mut ffi::fid_ep;
-                let cq = cq as *mut ffi::fid_cq;
+            loop {
+                let ret = ffi::wrap_fi_send(
+                    ep,
+                    buf.as_ptr() as *const libc::c_void,
+                    buf.len(),
+                    ptr::null_mut(),
+                    fi_addr,
+                    ptr::null_mut(),
+                );
 
-                loop {
-                    let ret = ffi::wrap_fi_send(
-                        ep,
-                        buf.as_ptr() as *const libc::c_void,
-                        buf.len(),
-                        ptr::null_mut(),
-                        fi_addr,
-                        ptr::null_mut(),
-                    );
-
-                    if ret == 0 {
-                        break;
-                    } else if ret != EAGAIN_ERROR {
-                        bail!("fi_send failed: {}", ret);
-                    }
-
-                    ffi::wrap_fi_cq_read(cq, ptr::null_mut(), 0);
+                if ret == 0 {
+                    break;
+                } else if ret != EAGAIN_ERROR {
+                    bail!("fi_send failed: {}", ret);
                 }
 
-                let mut comp: ffi::fi_cq_data_entry = std::mem::zeroed();
-                loop {
-                    let ret = ffi::wrap_fi_cq_read(
-                        cq,
-                        &mut comp as *mut ffi::fi_cq_data_entry as *mut libc::c_void,
-                        1,
-                    );
+                ffi::wrap_fi_cq_read(cq, ptr::null_mut(), 0);
+            }
 
-                    if ret == 1 {
-                        return Ok(buf);
-                    } else if ret < 0 && ret != EAGAIN_ERROR {
-                        if ret == EAVAIL_ERROR {
-                            return Err(cq_read_error(cq));
-                        }
-                        bail!("fi_cq_read failed: {}", ret);
+            let mut comp: ffi::fi_cq_data_entry = std::mem::zeroed();
+            loop {
+                let ret = ffi::wrap_fi_cq_read(
+                    cq,
+                    &mut comp as *mut ffi::fi_cq_data_entry as *mut libc::c_void,
+                    1,
+                );
+
+                if ret == 1 {
+                    return Ok(buf);
+                } else if ret < 0 && ret != EAGAIN_ERROR {
+                    if ret == EAVAIL_ERROR {
+                        return Err(cq_read_error(cq));
                     }
+                    bail!("fi_cq_read failed: {}", ret);
                 }
             }
-        })
-        .await?
+        }
     }
 
     /// Receives data from any peer.
@@ -521,54 +515,51 @@ impl FabricEndpoint {
     /// let buf = endpoint.recv(buf).await?;
     /// // buf now contains received data
     /// ```
-    pub async fn recv(&self, mut buf: Vec<u8>) -> Result<Vec<u8>> {
+    pub fn recv(&self, mut buf: Vec<u8>) -> Result<Vec<u8>> {
         let ep = self.ep as usize;
         let cq = self.recv_cq as usize;
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            unsafe {
-                let ep = ep as *mut ffi::fid_ep;
-                let cq = cq as *mut ffi::fid_cq;
+        unsafe {
+            let ep = ep as *mut ffi::fid_ep;
+            let cq = cq as *mut ffi::fid_cq;
 
-                loop {
-                    let ret = ffi::wrap_fi_recv(
-                        ep,
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                        ptr::null_mut(),
-                        0,
-                        ptr::null_mut(),
-                    );
+            loop {
+                let ret = ffi::wrap_fi_recv(
+                    ep,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    ptr::null_mut(),
+                    0,
+                    ptr::null_mut(),
+                );
 
-                    if ret == 0 {
-                        break;
-                    } else if ret != EAGAIN_ERROR {
-                        bail!("fi_recv failed: {}", ret);
-                    }
-
-                    ffi::wrap_fi_cq_read(cq, ptr::null_mut(), 0);
+                if ret == 0 {
+                    break;
+                } else if ret != EAGAIN_ERROR {
+                    bail!("fi_recv failed: {}", ret);
                 }
 
-                let mut comp: ffi::fi_cq_data_entry = std::mem::zeroed();
-                loop {
-                    let ret = ffi::wrap_fi_cq_read(
-                        cq,
-                        &mut comp as *mut ffi::fi_cq_data_entry as *mut libc::c_void,
-                        1,
-                    );
+                ffi::wrap_fi_cq_read(cq, ptr::null_mut(), 0);
+            }
 
-                    if ret == 1 {
-                        return Ok(buf);
-                    } else if ret < 0 && ret != EAGAIN_ERROR {
-                        if ret == EAVAIL_ERROR {
-                            return Err(cq_read_error(cq));
-                        }
-                        bail!("fi_cq_read failed: {}", ret);
+            let mut comp: ffi::fi_cq_data_entry = std::mem::zeroed();
+            loop {
+                let ret = ffi::wrap_fi_cq_read(
+                    cq,
+                    &mut comp as *mut ffi::fi_cq_data_entry as *mut libc::c_void,
+                    1,
+                );
+
+                if ret == 1 {
+                    return Ok(buf);
+                } else if ret < 0 && ret != EAGAIN_ERROR {
+                    if ret == EAVAIL_ERROR {
+                        return Err(cq_read_error(cq));
                     }
+                    bail!("fi_cq_read failed: {}", ret);
                 }
             }
-        })
-        .await?
+        }
     }
 
     /// Retrieves the local endpoint address.
@@ -641,145 +632,5 @@ impl FabricEndpoint {
             self.fi_addr = fi_addr;
             Ok(PeerId(fi_addr))
         }
-    }
-}
-
-/// Optional TCP helper to exchange `FabricAddress` blobs.
-///
-/// Libfabric endpoints rely on opaque addresses that usually travel over a
-/// separate control plane. `AddressExchangeChannel` is a convenience shim for
-/// demos and tests—you can freely replace it with any custom mechanism that
-/// ferries serialized [`FabricAddress`] values between peers.
-pub struct AddressExchangeChannel {
-    stream: TcpStream,
-}
-
-impl AddressExchangeChannel {
-    /// Connects to a server (client mode).
-    ///
-    /// Establishes a TCP connection to the server's control port for address
-    /// exchange. Production deployments can skip this entirely if they already
-    /// have a control plane (e.g., gRPC or MPI) for moving `FabricAddress`
-    /// payloads.
-    ///
-    /// # Arguments
-    ///
-    /// * `server_addr` - IP address of the server
-    /// * `port` - Optional port (defaults to [`CONTROL_PORT`])
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(AddressExchangeChannel)` on successful connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if connection fails.
-    pub async fn connect(server_addr: &str, port: Option<u16>) -> Result<Self> {
-        let port = port.unwrap_or(CONTROL_PORT);
-        let addr = format!("{}:{}", server_addr, port);
-        let stream = TcpStream::connect(&addr)
-            .await
-            .wrap_err_with(|| format!("failed to connect to control port {addr}"))?;
-        Ok(AddressExchangeChannel { stream })
-    }
-
-    /// Listens for client connection (server mode).
-    ///
-    /// Binds to the control port and waits for a client to connect.
-    ///
-    /// # Arguments
-    ///
-    /// * `port` - Optional port to bind (defaults to [`CONTROL_PORT`])
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(AddressExchangeChannel)` when a client connects.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if bind or accept fails.
-    pub async fn listen(port: Option<u16>) -> Result<Self> {
-        let port = port.unwrap_or(CONTROL_PORT);
-        let addr = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&addr)
-            .await
-            .wrap_err_with(|| format!("failed to bind control port {}", port))?;
-
-        let (stream, _) = listener
-            .accept()
-            .await
-            .wrap_err("control connection accept failed")?;
-        Ok(AddressExchangeChannel { stream })
-    }
-
-    /// Exchanges endpoint addresses and returns the peer's address.
-    ///
-    /// This method exchanges addresses over the TCP control channel but does NOT
-    /// insert the peer address into the endpoint. This allows manual peer management
-    /// for multi-peer scenarios.
-    ///
-    /// # Arguments
-    ///
-    /// * `endpoint` - The fabric endpoint to get local address from
-    /// * `is_client` - true for client mode, false for server mode
-    ///
-    /// # Returns
-    ///
-    /// Returns the peer's address. Call `endpoint.insert_peer()` to add it to
-    /// the address vector.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let peer_addr = conn.exchange(&endpoint, true).await?;
-    /// let peer_id = endpoint.insert_peer(&peer_addr)?;
-    /// ```
-    pub async fn exchange(
-        &mut self,
-        endpoint: &FabricEndpoint,
-        is_client: bool,
-    ) -> Result<FabricAddress> {
-        let local_addr = endpoint.local_address()?;
-
-        let peer_addr = if is_client {
-            self.write_address(&local_addr).await?;
-            self.read_address().await?
-        } else {
-            let peer = self.read_address().await?;
-            self.write_address(&local_addr).await?;
-            peer
-        };
-
-        Ok(peer_addr)
-    }
-
-    async fn write_address(&mut self, addr: &FabricAddress) -> Result<()> {
-        let len_bytes = (addr.len() as u64).to_le_bytes();
-        self.stream
-            .write_all(&len_bytes)
-            .await
-            .wrap_err("failed to send address length")?;
-        self.stream
-            .write_all(addr.as_bytes())
-            .await
-            .wrap_err("failed to send address payload")?;
-        Ok(())
-    }
-
-    async fn read_address(&mut self) -> Result<FabricAddress> {
-        let mut len_bytes = [0u8; 8];
-        self.stream
-            .read_exact(&mut len_bytes)
-            .await
-            .wrap_err("failed to read address length")?;
-        let addr_len = u64::from_le_bytes(len_bytes) as usize;
-
-        let mut addr = vec![0u8; addr_len];
-        self.stream
-            .read_exact(&mut addr)
-            .await
-            .wrap_err("failed to read address payload")?;
-
-        Ok(FabricAddress::from(addr))
     }
 }
