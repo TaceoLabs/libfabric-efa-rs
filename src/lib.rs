@@ -280,7 +280,7 @@ impl FabricEndpoint {
             };
 
             let provider_name = CString::new("efa").unwrap();
-            (*(*hints).fabric_attr).prov_name = provider_name.as_ptr() as *mut i8;
+            (*(*hints).fabric_attr).prov_name = provider_name.as_ptr() as *mut u8;
             std::mem::forget(provider_name);
 
             (*(*hints).ep_attr).type_ = ffi::fi_ep_type_FI_EP_RDM;
