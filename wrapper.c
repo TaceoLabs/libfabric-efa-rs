@@ -52,6 +52,16 @@ ssize_t wrap_fi_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
     return fi_cq_readfrom(cq, buf, count, src_addr);
 }
 
+ssize_t wrap_fi_cq_readerr(struct fid_cq *cq, struct fi_cq_err_entry *buf,
+                           uint64_t flags) {
+    return fi_cq_readerr(cq, buf, flags);
+}
+
+const char *wrap_fi_cq_strerror(struct fid_cq *cq, int prov_errno,
+                                const void *err_data, char *buf, size_t len) {
+    return fi_cq_strerror(cq, prov_errno, err_data, buf, len);
+}
+
 int wrap_fi_getname(struct fid *fid, void *addr, size_t *addrlen) {
     return fi_getname(fid, addr, addrlen);
 }

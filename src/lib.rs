@@ -42,6 +42,37 @@ pub const CONTROL_PORT: u16 = 9229;
 
 const DEFAULT_PORT: &str = "9228";
 const EAGAIN_ERROR: isize = -(ffi::FI_EAGAIN as i32) as isize;
+const EAVAIL_ERROR: isize = -(ffi::FI_EAVAIL as i32) as isize;
+
+/// Reads the pending error entry from a CQ and returns a descriptive error string.
+///
+/// Must only be called after `fi_cq_read` returns `-FI_EAVAIL`.
+unsafe fn cq_read_error(cq: *mut ffi::fid_cq) -> eyre::Report {
+    let mut err: ffi::fi_cq_err_entry = std::mem::zeroed();
+    let ret = ffi::wrap_fi_cq_readerr(cq, &mut err, 0);
+    if ret < 0 {
+        return eyre::eyre!("fi_cq_readerr failed: {}", ret);
+    }
+    let mut buf = [0i8; 256];
+    let prov_msg = ffi::wrap_fi_cq_strerror(
+        cq,
+        err.prov_errno,
+        err.err_data,
+        buf.as_mut_ptr() as *mut libc::c_char,
+        buf.len(),
+    );
+    let prov_str = if prov_msg.is_null() {
+        std::borrow::Cow::Borrowed("(no provider message)")
+    } else {
+        CStr::from_ptr(prov_msg).to_string_lossy()
+    };
+    eyre::eyre!(
+        "CQ error: {} (prov_errno={}, provider: {})",
+        err.err,
+        err.prov_errno,
+        prov_str
+    )
+}
 
 /// Compact, serializable representation of a libfabric endpoint address.
 ///
@@ -448,6 +479,9 @@ impl FabricEndpoint {
                     if ret == 1 {
                         return Ok(buf);
                     } else if ret < 0 && ret != EAGAIN_ERROR {
+                        if ret == EAVAIL_ERROR {
+                            return Err(cq_read_error(cq));
+                        }
                         bail!("fi_cq_read failed: {}", ret);
                     }
                 }
@@ -526,6 +560,9 @@ impl FabricEndpoint {
                     if ret == 1 {
                         return Ok(buf);
                     } else if ret < 0 && ret != EAGAIN_ERROR {
+                        if ret == EAVAIL_ERROR {
+                            return Err(cq_read_error(cq));
+                        }
                         bail!("fi_cq_read failed: {}", ret);
                     }
                 }
